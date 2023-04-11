@@ -132,7 +132,6 @@ func surround(s string, c string) string {
 func main() {
 	// application config
 	app := tview.NewApplication()
-	app.EnableMouse(true)
 
 	// table config
 	table := tview.NewTable()
