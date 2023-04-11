@@ -148,6 +148,14 @@ func main() {
 	table.SetSelectedStyle(selectedStyle)
 	data := &tableData{hosts: getHosts()}
 	table.SetContent(data)
+	table.SetFixed(1, 0)
+	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Rune() {
+		case 'q':
+			app.Stop()
+		}
+		return event
+	})
 
 	// watch changes in /var/spool/rwho
 	watcher, err := fsnotify.NewWatcher()
@@ -181,7 +189,12 @@ func main() {
 		}
 	}()
 
-	if err := app.SetRoot(table, true).SetFocus(table).Run(); err != nil {
+	frame := tview.NewFrame(table).
+		SetBorders(0, 0, 0, 0, 0, 0).
+		AddText("         ^F,PGDN:page down  ^B,PGUP:page up  g,HOME:top  G,END:bottom", false, tview.AlignLeft, tcell.ColorWhite).
+		AddText(" q:quit  j,↓:down           k,↑:up           h,←:left    l,→:right", false, tview.AlignLeft, tcell.ColorWhite)
+
+	if err := app.SetRoot(frame, true).SetFocus(table).Run(); err != nil {
 		log.Fatalln(err)
 	}
 }
