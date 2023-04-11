@@ -86,6 +86,7 @@ func (d *tableData) GetCell(row, column int) *tview.TableCell {
 		c.SetAlign(tview.AlignRight)
 	case 4:
 		c.SetAlign(tview.AlignLeft)
+		c.SetExpansion(1)
 	}
 
 	return c
