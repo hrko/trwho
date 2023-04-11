@@ -3,6 +3,7 @@ module github.com/hrko/it-rmap-go
 go 1.20
 
 require (
+	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gdamore/tcell/v2 v2.6.0
 	github.com/rivo/tview v0.0.0-20230406072732-e22ce9588bb4
 )

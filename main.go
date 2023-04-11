@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"path/filepath"
 	"strings"
@@ -9,9 +10,112 @@ import (
 
 	"github.com/hrko/it-rmap-go/rwho"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
+
+type host struct {
+	header  *rwho.WhodHeader
+	entries []*rwho.WhoEntry
+}
+
+type tableData struct {
+	tview.TableContentReadOnly
+	hosts []*host
+}
+
+func (d *tableData) GetCell(row, column int) *tview.TableCell {
+	head := []string{"Hostname", "IP Address", "Uptime", "Load", "Users(idle time)"}
+	if row > len(d.hosts) {
+		return nil
+	}
+	if column > len(head)-1 {
+		return nil
+	}
+
+	c := tview.NewTableCell("")
+
+	// set text
+	txt := ""
+	if row == 0 { // head
+		txt = head[column]
+	} else { // data
+		h := d.hosts[row-1]
+		switch column {
+		case 0:
+			txt = h.header.GetHostname()
+		case 1:
+			if ss, err := net.LookupHost(h.header.GetHostname()); err == nil {
+				txt = ss[0]
+			}
+		case 2:
+			txt = fmtDuration(h.header.GetUptime())
+		case 3:
+			txt = fmt.Sprintf("%1.2f", h.header.GetLoadAverage1min())
+		case 4:
+			for _, e := range h.entries {
+				txt += e.GetUser()
+				txt += "@" + e.GetTty()
+				txt += "(" + fmtDuration(e.GetIdleTime()) + ")" + " "
+			}
+			txt = strings.TrimSpace(txt)
+		}
+	}
+	c.SetText(surround(txt, " "))
+
+	// set properties
+	if row == 0 {
+		c.SetSelectable(false)
+		c.SetTextColor(tcell.ColorBlack)
+		c.SetBackgroundColor(tcell.ColorWhite)
+		c.SetAttributes(tcell.AttrBold)
+	} else {
+		if d.hosts[row-1].header.IsDown() {
+			c.SetAttributes(tcell.AttrDim)
+		}
+	}
+	switch column {
+	case 0:
+		c.SetAlign(tview.AlignLeft)
+	case 1:
+		c.SetAlign(tview.AlignLeft)
+	case 2:
+		c.SetAlign(tview.AlignRight)
+	case 3:
+		c.SetAlign(tview.AlignRight)
+	case 4:
+		c.SetAlign(tview.AlignLeft)
+	}
+
+	return c
+}
+
+func (d *tableData) GetRowCount() int {
+	return len(d.hosts) + 1
+}
+
+func (d *tableData) GetColumnCount() int {
+	return 5
+}
+
+func getHosts() []*host {
+	whodFiles, err := filepath.Glob("/var/spool/rwho/whod.*")
+	if err != nil {
+		log.Fatalln(err)
+	}
+	hostCnt := len(whodFiles)
+	hosts := make([]*host, hostCnt)
+	for i, f := range whodFiles {
+		h := new(host)
+		hosts[i] = h
+		h.header, h.entries, err = rwho.ReadWhod(f)
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
+	return hosts
+}
 
 func fmtDuration(d time.Duration) string {
 	d = d.Round(time.Minute)
@@ -25,22 +129,11 @@ func surround(s string, c string) string {
 }
 
 func main() {
-	whodFiles, err := filepath.Glob("/var/spool/rwho/whod.*")
-	if err != nil {
-		panic(err)
-	}
-	hostCnt := len(whodFiles)
-	headers := make([]*rwho.WhodHeader, hostCnt)
-	entries := make([][]*rwho.WhoEntry, hostCnt)
-	for i, p := range whodFiles {
-		headers[i], entries[i], err = rwho.ReadWhod(p)
-		if err != nil {
-			panic(err)
-		}
-	}
-
+	// application config
 	app := tview.NewApplication()
+	app.EnableMouse(true)
 
+	// table config
 	table := tview.NewTable()
 	table.SetSelectable(true, false)
 	table.SetBackgroundColor(tcell.ColorReset)
@@ -49,92 +142,42 @@ func main() {
 	selectedStyle = selectedStyle.Foreground(tcell.ColorBlack)
 	selectedStyle = selectedStyle.Attributes(tcell.AttrInvalid)
 	table.SetSelectedStyle(selectedStyle)
-	// table.SetSeparator('|')
+	data := &tableData{hosts: getHosts()}
+	table.SetContent(data)
 
-	type column struct {
-		head  string
-		align int
-		cells []*tview.TableCell
+	// watch changes in /var/spool/rwho
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatalln(err)
+	}
+	defer watcher.Close()
+
+	if err := watcher.Add("/var/spool/rwho"); err != nil {
+		log.Fatalln(err)
 	}
 
-	cols := make([]*column, 0)
-	cols = append(cols, &column{
-		head:  "Hostname",
-		align: tview.AlignLeft,
-		cells: make([]*tview.TableCell, 0),
-	})
-	cols = append(cols, &column{
-		head:  "IP Address",
-		align: tview.AlignLeft,
-		cells: make([]*tview.TableCell, 0),
-	})
-	cols = append(cols, &column{
-		head:  "Uptime",
-		align: tview.AlignRight,
-		cells: make([]*tview.TableCell, 0),
-	})
-	cols = append(cols, &column{
-		head:  "Load",
-		align: tview.AlignRight,
-		cells: make([]*tview.TableCell, 0),
-	})
-	cols = append(cols, &column{
-		head:  "Users(idle time)",
-		align: tview.AlignLeft,
-		cells: make([]*tview.TableCell, 0),
-	})
-	for _, c := range cols {
-		cell := tview.NewTableCell(surround(c.head, " "))
-		cell.SetAttributes(tcell.AttrBold)
-		cell.SetSelectable(false)
-		cell.SetBackgroundColor(tcell.ColorWhite)
-		cell.SetTextColor(tcell.ColorBlack)
-		c.cells = append(c.cells, cell)
-	}
-	for i := 0; i < hostCnt; i++ {
-		h := headers[i]
-
-		ipAddrStr := ""
-		if ss, err := net.LookupHost(h.GetHostname()); err == nil {
-			ipAddrStr = ss[0]
+	// update when a new packet arrives
+	go func() {
+		for {
+			select {
+			case <-watcher.Events:
+				data.hosts = getHosts()
+				app.QueueUpdateDraw(func() {})
+			case err := <-watcher.Errors:
+				log.Fatalln(err)
+			}
 		}
-		loadavStr := fmt.Sprintf("%1.2f", h.GetLoadAverage1min())
-		usersStr := ""
-		for _, e := range entries[i] {
-			usersStr += e.GetUser()
-			usersStr += "@" + e.GetTty()
-			usersStr += "(" + fmtDuration(e.GetIdleTime()) + ")" + " "
-		}
-		usersStr = strings.TrimSpace(usersStr)
+	}()
 
-		cellHostname := tview.NewTableCell(surround(h.GetHostname(), " "))
-		cellIpAddr := tview.NewTableCell(surround(ipAddrStr, " "))
-		cellUptime := tview.NewTableCell(surround(fmtDuration(h.GetUptime()), " "))
-		cellLoadav := tview.NewTableCell(surround(loadavStr, " "))
-		cellUsers := tview.NewTableCell(surround(usersStr, " "))
-
-		cols[0].cells = append(cols[0].cells, cellHostname)
-		cols[1].cells = append(cols[1].cells, cellIpAddr)
-		cols[2].cells = append(cols[2].cells, cellUptime)
-		cols[3].cells = append(cols[3].cells, cellLoadav)
-		cols[4].cells = append(cols[4].cells, cellUsers)
-
-		if h.IsDown() {
-			cellHostname.SetAttributes(tcell.AttrDim)
-			cellIpAddr.SetAttributes(tcell.AttrDim)
-			cellUptime.SetAttributes(tcell.AttrDim)
-			cellLoadav.SetAttributes(tcell.AttrDim)
-			cellUsers.SetAttributes(tcell.AttrDim)
+	// update once a minute
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			app.QueueUpdateDraw(func() {})
 		}
-	}
-	for colIdx, col := range cols {
-		for rowIdx, cell := range col.cells {
-			cell.SetAlign(col.align)
-			table.SetCell(rowIdx, colIdx, cell)
-		}
-	}
+	}()
 
 	if err := app.SetRoot(table, true).SetFocus(table).Run(); err != nil {
-		panic(err)
+		log.Fatalln(err)
 	}
 }
