@@ -26,7 +26,7 @@ type tableData struct {
 }
 
 func (d *tableData) GetCell(row, column int) *tview.TableCell {
-	head := []string{"Hostname", "IP Address", "Uptime", "Load", "Users(idle time)"}
+	head := []string{"Hostname", "DNS Record", "Uptime", "Load", "Users(idle time)"}
 	if row > len(d.hosts) {
 		return nil
 	}
@@ -50,7 +50,11 @@ func (d *tableData) GetCell(row, column int) *tview.TableCell {
 				txt = ss[0]
 			}
 		case 2:
-			txt = fmtDuration(h.header.GetUptime())
+			if h.header.IsDown() {
+				txt = "[red]down"
+			} else {
+				txt = fmtDuration(h.header.GetUptime())
+			}
 		case 3:
 			txt = fmt.Sprintf("%1.2f", h.header.GetLoadAverage1min())
 		case 4:
