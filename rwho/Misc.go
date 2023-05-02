@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
+	"path/filepath"
 )
 
 func bytesToString(b []byte) string {
@@ -53,4 +54,49 @@ func ReadWhod(path string) (*WhodHeader, []*WhoEntry, error) {
 	}
 
 	return header, entries, nil
+}
+
+func ParseWhod(r io.Reader) (*Whod, error) {
+	w := new(Whod)
+	var err error
+
+	w.Header, err = ParseWhodHeader(r)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		e, err := ParseWhoEntry(r)
+		if err != nil {
+			break
+		}
+		w.WhoEntries = append(w.WhoEntries, e)
+	}
+
+	return w, nil
+}
+
+func ReadWhodFile(path string) (*Whod, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return ParseWhod(f)
+}
+
+func ScanHosts() ([]*Whod, error) {
+	paths, err := filepath.Glob("/var/spool/rwho/whod.*")
+	if err != nil {
+		return nil, err
+	}
+	l := make([]*Whod, 0)
+	for _, p := range paths {
+		w, err := ReadWhodFile(p)
+		if err != nil {
+			return nil, err
+		}
+		l = append(l, w)
+	}
+	return l, nil
 }
