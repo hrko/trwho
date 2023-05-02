@@ -16,8 +16,7 @@ import (
 )
 
 type host struct {
-	header  *rwho.WhodHeader
-	entries []*rwho.WhoEntry
+	Whod *rwho.Whod
 }
 
 type tableData struct {
@@ -42,23 +41,24 @@ func (d *tableData) GetCell(row, column int) *tview.TableCell {
 		txt = head[column]
 	} else { // data
 		h := d.hosts[row-1]
+		whodHeader := h.Whod.Header
 		switch column {
 		case 0:
-			txt = h.header.GetHostname()
+			txt = whodHeader.GetHostname()
 		case 1:
-			if ss, err := net.LookupHost(h.header.GetHostname()); err == nil {
+			if ss, err := net.LookupHost(whodHeader.GetHostname()); err == nil {
 				txt = ss[0]
 			}
 		case 2:
-			if h.header.IsDown() {
+			if whodHeader.IsDown() {
 				txt = "[red]down"
 			} else {
-				txt = fmtDuration(h.header.GetUptime())
+				txt = fmtDuration(whodHeader.GetUptime())
 			}
 		case 3:
-			txt = fmt.Sprintf("%1.2f", h.header.GetLoadAverage1min())
+			txt = fmt.Sprintf("%1.2f", whodHeader.GetLoadAverage1min())
 		case 4:
-			for _, e := range h.entries {
+			for _, e := range h.Whod.WhoEntries {
 				txt += e.GetUser()
 				txt += "@" + e.GetTty()
 				txt += "(" + fmtDuration(e.GetIdleTime()) + ")" + " "
@@ -75,7 +75,7 @@ func (d *tableData) GetCell(row, column int) *tview.TableCell {
 		c.SetBackgroundColor(tcell.ColorWhite)
 		c.SetAttributes(tcell.AttrBold)
 	} else {
-		if d.hosts[row-1].header.IsDown() {
+		if d.hosts[row-1].Whod.Header.IsDown() {
 			c.SetAttributes(tcell.AttrDim)
 		}
 	}
@@ -114,7 +114,7 @@ func getHosts() []*host {
 	for i, f := range whodFiles {
 		h := new(host)
 		hosts[i] = h
-		h.header, h.entries, err = rwho.ReadWhod(f)
+		h.Whod.Header, h.Whod.WhoEntries, err = rwho.ReadWhod(f)
 		if err != nil {
 			log.Fatalln(err)
 		}
