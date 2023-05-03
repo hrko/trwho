@@ -1,0 +1,12 @@
+{
+  "hosts": [
+    {
+      "hostname": "bat",
+      "note": "TEST1"
+    },
+    {
+      "hostname": "bas",
+      "note": "TEST1"
+    }
+  ]
+}
