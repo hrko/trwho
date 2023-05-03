@@ -1,10 +1,10 @@
-# it-rmap-go
+# trwho
 A TUI application to show rwhod information saved as  `/var/spool/rwho/whod.*`.
 
 ## Build
 ```
-$ git clone git@github.com:hrko/it-rmap-go.git
-$ cd it-rmap-go
+$ git clone git@github.com:hrko/trwho.git
+$ cd trwho
 $ go build
 ```
 
@@ -14,7 +14,7 @@ First, make sure that you can read `/var/spool/rwho/`.
 $ sudo chmod 755 /var/spool/rwho
 ```
 
-Then, just run `it-rmap-go`.
+Then, just run `trwho`.
 ```
-$ it-rmap-go
+$ trwho
 ```

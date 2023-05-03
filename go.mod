@@ -1,4 +1,4 @@
-module github.com/hrko/it-rmap-go
+module github.com/hrko/trwho
 
 go 1.20
 

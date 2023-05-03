@@ -9,9 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hrko/it-rmap-go/rwho"
+	"github.com/hrko/trwho/rwho"
 
-	"github.com/adrg/xdg"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
