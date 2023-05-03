@@ -273,7 +273,7 @@ func main() {
 	table.SetSelectedStyle(selectedStyle)
 	data := &TableData{Hosts: hosts}
 	table.SetContent(data)
-	table.SetFixed(1, 0)
+	table.SetFixed(1, 1)
 	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Rune() {
 		case 'q':
