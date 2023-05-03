@@ -6,7 +6,11 @@
     },
     {
       "hostname": "bas",
-      "note": "TEST1"
+      "note": "TEST2"
+    },
+    {
+      "hostname": "hoge",
+      "note": "TEST3"
     }
   ]
 }

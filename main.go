@@ -1,72 +1,169 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
-	"path/filepath"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/hrko/it-rmap-go/rwho"
 
+	"github.com/adrg/xdg"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"golang.org/x/exp/slices"
 )
 
-type host struct {
-	Whod *rwho.Whod
+const hardCodedConfigPath = "./settings.json"
+
+type HostProperty int
+
+const (
+	Hostname HostProperty = iota
+	Note
+	DnsRecord
+	Uptime
+	Load
+	Users
+	HostPropertyCount
+)
+
+func (i HostProperty) String() string {
+	switch i {
+	case Hostname:
+		return "Hostname"
+	case Note:
+		return "Note"
+	case DnsRecord:
+		return "DNS Record"
+	case Uptime:
+		return "Uptime"
+	case Load:
+		return "Load"
+	case Users:
+		return "Users(idle time)"
+	default:
+		return ""
+	}
 }
 
-type tableData struct {
+type Host struct {
+	Hostname  string
+	Whod      *rwho.Whod
+	Config    *ConfigHostEntry
+	IpAddress string
+}
+
+func NewHost(hostname string) *Host {
+	h := new(Host)
+	h.Hostname = hostname
+	if ss, err := net.LookupHost(hostname); err == nil {
+		h.IpAddress = ss[0]
+	} else {
+		h.IpAddress = ""
+	}
+	return h
+}
+
+func (h *Host) IsDown() bool {
+	if h.Whod == nil {
+		return true
+	}
+	return h.Whod.Header.IsDown()
+}
+
+func (h *Host) Value(i HostProperty) string {
+	switch i {
+	case Hostname:
+		return h.Hostname
+	case Note:
+		if h.Config != nil {
+			return h.Config.Note
+		} else {
+			return ""
+		}
+	case DnsRecord:
+		return h.IpAddress
+	case Uptime:
+		if h.IsDown() {
+			return "[red]down"
+		} else {
+			return fmtDuration(h.Whod.Header.GetUptime())
+		}
+	case Load:
+		if h.IsDown() {
+			return ""
+		} else {
+			return fmt.Sprintf("%1.2f", h.Whod.Header.GetLoadAverage1min())
+		}
+	case Users:
+		if h.IsDown() {
+			return ""
+		} else {
+			text := ""
+			for _, e := range h.Whod.WhoEntries {
+				text += e.GetUser()
+				text += "@" + e.GetTty()
+				text += "(" + fmtDuration(e.GetIdleTime()) + ")" + " "
+			}
+			text = strings.TrimSpace(text)
+			return text
+		}
+	default:
+		return ""
+	}
+}
+
+type TableData struct {
 	tview.TableContentReadOnly
-	hosts []*host
+	Hosts []*Host
 }
 
-func (d *tableData) GetCell(row, column int) *tview.TableCell {
-	head := []string{"Hostname", "DNS Record", "Uptime", "Load", "Users(idle time)"}
-	if row > len(d.hosts) {
-		return nil
-	}
-	if column > len(head)-1 {
-		return nil
-	}
+type Config struct {
+	Hosts []*ConfigHostEntry `json:"hosts"`
+}
 
+type ConfigHostEntry struct {
+	Hostname string `json:"hostname"`
+	Note     string `json:"note"`
+}
+
+func ReadConfig(path string) (*Config, error) {
+	c := new(Config)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	d := json.NewDecoder(f)
+	if err := d.Decode(c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (d *TableData) GetCell(row, column int) *tview.TableCell {
 	c := tview.NewTableCell("")
 
-	// set text
-	txt := ""
-	if row == 0 { // head
-		txt = head[column]
-	} else { // data
-		h := d.hosts[row-1]
-		whodHeader := h.Whod.Header
-		switch column {
-		case 0:
-			txt = whodHeader.GetHostname()
-		case 1:
-			if ss, err := net.LookupHost(whodHeader.GetHostname()); err == nil {
-				txt = ss[0]
-			}
-		case 2:
-			if whodHeader.IsDown() {
-				txt = "[red]down"
-			} else {
-				txt = fmtDuration(whodHeader.GetUptime())
-			}
-		case 3:
-			txt = fmt.Sprintf("%1.2f", whodHeader.GetLoadAverage1min())
-		case 4:
-			for _, e := range h.Whod.WhoEntries {
-				txt += e.GetUser()
-				txt += "@" + e.GetTty()
-				txt += "(" + fmtDuration(e.GetIdleTime()) + ")" + " "
-			}
-			txt = strings.TrimSpace(txt)
-		}
+	if row >= d.GetRowCount() {
+		return c
 	}
-	c.SetText(surround(txt, " "))
+	if column >= d.GetColumnCount() {
+		return c
+	}
+
+	// set text
+	cellText := ""
+	if row == 0 { // head
+		cellText = HostProperty(column).String()
+	} else { // data
+		host := d.Hosts[row-1]
+		cellText = host.Value(HostProperty(column))
+	}
+	c.SetText(surround(cellText, " "))
 
 	// set properties
 	if row == 0 {
@@ -75,20 +172,26 @@ func (d *tableData) GetCell(row, column int) *tview.TableCell {
 		c.SetBackgroundColor(tcell.ColorWhite)
 		c.SetAttributes(tcell.AttrBold)
 	} else {
-		if d.hosts[row-1].Whod.Header.IsDown() {
+		if d.Hosts[row-1].Whod != nil {
+			if d.Hosts[row-1].Whod.Header.IsDown() {
+				c.SetAttributes(tcell.AttrDim)
+			}
+		} else {
 			c.SetAttributes(tcell.AttrDim)
 		}
 	}
-	switch column {
-	case 0:
+	switch HostProperty(column) {
+	case Hostname:
 		c.SetAlign(tview.AlignLeft)
-	case 1:
+	case Note:
 		c.SetAlign(tview.AlignLeft)
-	case 2:
+	case DnsRecord:
+		c.SetAlign(tview.AlignLeft)
+	case Uptime:
 		c.SetAlign(tview.AlignRight)
-	case 3:
+	case Load:
 		c.SetAlign(tview.AlignRight)
-	case 4:
+	case Users:
 		c.SetAlign(tview.AlignLeft)
 		c.SetExpansion(1)
 	}
@@ -96,30 +199,12 @@ func (d *tableData) GetCell(row, column int) *tview.TableCell {
 	return c
 }
 
-func (d *tableData) GetRowCount() int {
-	return len(d.hosts) + 1
+func (d *TableData) GetRowCount() int {
+	return len(d.Hosts) + 1
 }
 
-func (d *tableData) GetColumnCount() int {
-	return 5
-}
-
-func getHosts() []*host {
-	whodFiles, err := filepath.Glob("/var/spool/rwho/whod.*")
-	if err != nil {
-		log.Fatalln(err)
-	}
-	hostCnt := len(whodFiles)
-	hosts := make([]*host, hostCnt)
-	for i, f := range whodFiles {
-		h := new(host)
-		hosts[i] = h
-		h.Whod.Header, h.Whod.WhoEntries, err = rwho.ReadWhod(f)
-		if err != nil {
-			log.Fatalln(err)
-		}
-	}
-	return hosts
+func (d *TableData) GetColumnCount() int {
+	return int(HostPropertyCount)
 }
 
 func fmtDuration(d time.Duration) string {
@@ -134,6 +219,40 @@ func surround(s string, c string) string {
 }
 
 func main() {
+	// initialize host list
+	hosts := make([]*Host, 0)
+
+	config, err := ReadConfig(hardCodedConfigPath)
+	if err != nil {
+		log.Println(err)
+		log.Println("Cannot read config file.")
+		os.Exit(1)
+	}
+	for _, configHostEntry := range config.Hosts {
+		h := NewHost(configHostEntry.Hostname)
+		h.Config = configHostEntry
+		hosts = append(hosts, h)
+	}
+
+	whods, err := rwho.ScanHosts()
+	if err != nil {
+		log.Println(err)
+		log.Println("Cannot get rwho information from spool.")
+		os.Exit(1)
+	}
+	for _, whod := range whods {
+		idx := slices.IndexFunc(hosts, func(h *Host) bool {
+			return h.Hostname == whod.Header.GetHostname()
+		})
+		if idx != -1 {
+			hosts[idx].Whod = whod
+		} else {
+			h := NewHost(whod.Header.GetHostname())
+			h.Whod = whod
+			hosts = append(hosts, h)
+		}
+	}
+
 	// application config
 	app := tview.NewApplication()
 
@@ -146,7 +265,7 @@ func main() {
 	selectedStyle = selectedStyle.Foreground(tcell.ColorBlack)
 	selectedStyle = selectedStyle.Attributes(tcell.AttrInvalid)
 	table.SetSelectedStyle(selectedStyle)
-	data := &tableData{hosts: getHosts()}
+	data := &TableData{Hosts: hosts}
 	table.SetContent(data)
 	table.SetFixed(1, 0)
 	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -172,8 +291,24 @@ func main() {
 	go func() {
 		for {
 			select {
-			case <-watcher.Events:
-				data.hosts = getHosts()
+			case event := <-watcher.Events:
+				whodPath := event.Name
+				whod, err := rwho.ReadWhodFile(whodPath)
+				if err != nil {
+					log.Println(err)
+					log.Printf("Cannot read whod file %s.\n", whodPath)
+					os.Exit(1)
+				}
+				idx := slices.IndexFunc(data.Hosts, func(h *Host) bool {
+					return h.Hostname == whod.Header.GetHostname()
+				})
+				if idx != -1 {
+					data.Hosts[idx].Whod = whod
+				} else {
+					h := NewHost(whod.Header.GetHostname())
+					h.Whod = whod
+					data.Hosts = append(data.Hosts, h)
+				}
 				app.QueueUpdateDraw(func() {})
 			case err := <-watcher.Errors:
 				log.Fatalln(err)
