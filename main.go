@@ -322,10 +322,10 @@ func main() {
 		}
 	}()
 
-	// update once a minute
+	// update once a second
 	go func() {
 		for {
-			time.Sleep(time.Minute)
+			time.Sleep(time.Second)
 			app.QueueUpdateDraw(func() {})
 		}
 	}()
