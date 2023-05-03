@@ -1,0 +1,12 @@
+{
+  "hosts": [
+    {
+      "hostname": "earth",
+      "note": "WWW Server"
+    },
+    {
+      "hostname": "mercury",
+      "note": "LDAP Server"
+    }
+  ]
+}

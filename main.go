@@ -11,13 +11,14 @@ import (
 
 	"github.com/hrko/trwho/rwho"
 
+	"github.com/adrg/xdg"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"golang.org/x/exp/slices"
 )
 
-const hardCodedConfigPath = "./settings.json"
+const appName = "trwho"
 
 type HostProperty int
 
@@ -144,6 +145,10 @@ func ReadConfig(path string) (*Config, error) {
 	return c, nil
 }
 
+// func SearchConfigFile() (string, error) {
+
+// }
+
 func (d *TableData) GetCell(row, column int) *tview.TableCell {
 	c := tview.NewTableCell("")
 
@@ -221,16 +226,18 @@ func main() {
 	// initialize host list
 	hosts := make([]*Host, 0)
 
-	config, err := ReadConfig(hardCodedConfigPath)
-	if err != nil {
-		log.Println(err)
-		log.Println("Cannot read config file.")
-		os.Exit(1)
-	}
-	for _, configHostEntry := range config.Hosts {
-		h := NewHost(configHostEntry.Hostname)
-		h.Config = configHostEntry
-		hosts = append(hosts, h)
+	if path, err := xdg.SearchConfigFile(appName + "/config.json"); err == nil {
+		config, err := ReadConfig(path)
+		if err != nil {
+			log.Println(err)
+			log.Printf("Cannot read config file %s\n", path)
+			os.Exit(1)
+		}
+		for _, configHostEntry := range config.Hosts {
+			h := NewHost(configHostEntry.Hostname)
+			h.Config = configHostEntry
+			hosts = append(hosts, h)
+		}
 	}
 
 	whods, err := rwho.ScanHosts()
