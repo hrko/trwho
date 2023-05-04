@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/hrko/trwho/rwho"
 
-	"github.com/adrg/xdg"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -24,7 +22,7 @@ type HostProperty int
 const (
 	Hostname HostProperty = iota
 	Note
-	DnsRecord
+	ResolvedAddr
 	Uptime
 	Load
 	Users
@@ -37,14 +35,14 @@ func (i HostProperty) String() string {
 		return "Hostname"
 	case Note:
 		return "Note"
-	case DnsRecord:
-		return "DNS Record"
+	case ResolvedAddr:
+		return "Resolved Addr"
 	case Uptime:
 		return "Uptime"
 	case Load:
 		return "Load"
 	case Users:
-		return "Users(idle time)"
+		return "Users"
 	default:
 		return ""
 	}
@@ -85,7 +83,7 @@ func (h *Host) Value(i HostProperty) string {
 		} else {
 			return ""
 		}
-	case DnsRecord:
+	case ResolvedAddr:
 		return h.IpAddress
 	case Uptime:
 		if h.IsDown() {
@@ -115,6 +113,37 @@ func (h *Host) Value(i HostProperty) string {
 	default:
 		return ""
 	}
+}
+
+func InitHostList(config *Config) ([]*Host, error) {
+	hosts := make([]*Host, 0)
+
+	if config != nil {
+		for _, configHostEntry := range config.Hosts {
+			h := NewHost(configHostEntry.Hostname)
+			h.Config = configHostEntry
+			hosts = append(hosts, h)
+		}
+	}
+
+	whods, err := rwho.ScanHosts()
+	if err != nil {
+		return nil, err
+	}
+	for _, whod := range whods {
+		idx := slices.IndexFunc(hosts, func(h *Host) bool {
+			return h.Hostname == whod.Header.GetHostname()
+		})
+		if idx != -1 {
+			hosts[idx].Whod = whod
+		} else {
+			h := NewHost(whod.Header.GetHostname())
+			h.Whod = whod
+			hosts = append(hosts, h)
+		}
+	}
+
+	return hosts, nil
 }
 
 type TableData struct {
@@ -162,7 +191,7 @@ func (d *TableData) GetCell(row, column int) *tview.TableCell {
 		c.SetAlign(tview.AlignLeft)
 	case Note:
 		c.SetAlign(tview.AlignLeft)
-	case DnsRecord:
+	case ResolvedAddr:
 		c.SetAlign(tview.AlignLeft)
 	case Uptime:
 		c.SetAlign(tview.AlignRight)
@@ -196,40 +225,29 @@ func surround(s string, c string) string {
 }
 
 func main() {
-	// initialize host list
-	hosts := make([]*Host, 0)
-
-	if path, err := xdg.SearchConfigFile(appName + "/config.json"); err == nil {
-		config, err := ReadConfig(path)
-		if err != nil {
-			log.Println(err)
-			log.Printf("Cannot read config file %s\n", path)
-			os.Exit(1)
-		}
-		for _, configHostEntry := range config.Hosts {
-			h := NewHost(configHostEntry.Hostname)
-			h.Config = configHostEntry
-			hosts = append(hosts, h)
-		}
-	}
-
-	whods, err := rwho.ScanHosts()
+	// load config
+	configWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Println(err)
-		log.Println("Cannot get rwho information from spool.")
-		os.Exit(1)
+		log.Fatalln("Cannot create watcher for config file.")
 	}
-	for _, whod := range whods {
-		idx := slices.IndexFunc(hosts, func(h *Host) bool {
-			return h.Hostname == whod.Header.GetHostname()
-		})
-		if idx != -1 {
-			hosts[idx].Whod = whod
-		} else {
-			h := NewHost(whod.Header.GetHostname())
-			h.Whod = whod
-			hosts = append(hosts, h)
+	defer configWatcher.Close()
+	var config *Config
+	configPath, err := SearchConfigFile()
+	if err == nil {
+		config, err = ReadConfig(configPath)
+		if err != nil {
+			log.Fatalln("Cannot read config file.")
 		}
+		err = configWatcher.Add(configPath)
+		if err != nil {
+			log.Fatalln("Cannot watch config file.")
+		}
+	}
+
+	// initialize host list
+	hosts, err := InitHostList(config)
+	if err != nil {
+		log.Fatalln("Failed to initialize host list at startup.")
 	}
 
 	// application config
@@ -256,13 +274,12 @@ func main() {
 	})
 
 	// watch changes in /var/spool/rwho
-	watcher, err := fsnotify.NewWatcher()
+	rwhoWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer watcher.Close()
-
-	if err := watcher.Add("/var/spool/rwho"); err != nil {
+	defer rwhoWatcher.Close()
+	if err := rwhoWatcher.Add("/var/spool/rwho"); err != nil {
 		log.Fatalln(err)
 	}
 
@@ -270,13 +287,15 @@ func main() {
 	go func() {
 		for {
 			select {
-			case event := <-watcher.Events:
+			case event, ok := <-rwhoWatcher.Events:
+				if !ok {
+					return
+				}
 				whodPath := event.Name
 				whod, err := rwho.ReadWhodFile(whodPath)
 				if err != nil {
 					log.Println(err)
-					log.Printf("Cannot read whod file %s.\n", whodPath)
-					os.Exit(1)
+					log.Printf("Cannot read whod file \"%s\".\n", whodPath)
 				}
 				idx := slices.IndexFunc(data.Hosts, func(h *Host) bool {
 					return h.Hostname == whod.Header.GetHostname()
@@ -289,7 +308,39 @@ func main() {
 					data.Hosts = append(data.Hosts, h)
 				}
 				app.QueueUpdateDraw(func() {})
-			case err := <-watcher.Errors:
+			case err, ok := <-rwhoWatcher.Errors:
+				if !ok {
+					return
+				}
+				log.Fatalln(err)
+			}
+		}
+	}()
+
+	// update on config change
+	go func() {
+		for {
+			select {
+			case event, ok := <-configWatcher.Events:
+				if !ok {
+					return
+				}
+				config, err = ReadConfig(event.Name)
+				if err != nil {
+					log.Println("Cannot reload config.")
+					continue
+				}
+				hosts, err := InitHostList(config)
+				if err != nil {
+					log.Println("Cannot re-init host list.")
+					continue
+				}
+				data.Hosts = hosts
+				app.QueueUpdateDraw(func() {})
+			case err, ok := <-configWatcher.Errors:
+				if !ok {
+					return
+				}
 				log.Fatalln(err)
 			}
 		}

@@ -2,7 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
+
+	"github.com/adrg/xdg"
 )
 
 type Config struct {
@@ -27,6 +31,15 @@ func ReadConfig(path string) (*Config, error) {
 	return c, nil
 }
 
-// func SearchConfigFile() (string, error) {
-
-// }
+func SearchConfigFile() (string, error) {
+	configDirs := make([]string, 0)
+	configDirs = append(configDirs, xdg.ConfigHome)
+	configDirs = append(configDirs, "/etc")
+	for _, dir := range configDirs {
+		configPath := filepath.Join(dir, appName, "config.json")
+		if _, err := os.Stat(configPath); err == nil {
+			return configPath, nil
+		}
+	}
+	return "", errors.New("Config file not found")
+}
